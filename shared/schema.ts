@@ -42,3 +42,78 @@ export const testConnectionRequestSchema = z.object({
 });
 
 export type TestConnectionRequest = z.infer<typeof testConnectionRequestSchema>;
+
+// Database Manager Schemas
+
+// Table column information
+export const tableColumnSchema = z.object({
+  name: z.string(),
+  dataType: z.string(),
+  isNullable: z.boolean(),
+  defaultValue: z.string().nullable(),
+  maxLength: z.number().nullable(),
+  isPrimaryKey: z.boolean(),
+  ordinalPosition: z.number(),
+});
+
+export type TableColumn = z.infer<typeof tableColumnSchema>;
+
+// Table structure with columns
+export const tableStructureSchema = z.object({
+  tableName: z.string(),
+  columns: z.array(tableColumnSchema),
+  primaryKeys: z.array(z.string()),
+  rowCount: z.number(),
+  sizeBytes: z.number(),
+});
+
+export type TableStructure = z.infer<typeof tableStructureSchema>;
+
+// Paginated table data
+export const tableDataPageSchema = z.object({
+  tableName: z.string(),
+  columns: z.array(z.string()),
+  rows: z.array(z.record(z.any())),
+  totalRows: z.number(),
+  page: z.number(),
+  pageSize: z.number(),
+  totalPages: z.number(),
+});
+
+export type TableDataPage = z.infer<typeof tableDataPageSchema>;
+
+// Database selection (source or destination)
+export const dbSelectionSchema = z.enum(["source", "destination"]);
+export type DbSelection = z.infer<typeof dbSelectionSchema>;
+
+// Request to fetch table data
+export const fetchTableDataRequestSchema = z.object({
+  db: dbSelectionSchema,
+  tableName: z.string(),
+  page: z.number().min(1).default(1),
+  pageSize: z.number().min(1).max(100).default(25),
+  orderBy: z.string().optional(),
+  orderDir: z.enum(["asc", "desc"]).optional().default("asc"),
+  search: z.string().optional(),
+});
+
+export type FetchTableDataRequest = z.infer<typeof fetchTableDataRequestSchema>;
+
+// Row mutation (insert/update/delete)
+export const rowMutationSchema = z.object({
+  db: dbSelectionSchema,
+  tableName: z.string(),
+  operation: z.enum(["insert", "update", "delete"]),
+  data: z.record(z.any()).optional(),
+  where: z.record(z.any()).optional(),
+});
+
+export type RowMutation = z.infer<typeof rowMutationSchema>;
+
+// Backup request
+export const backupRequestSchema = z.object({
+  db: dbSelectionSchema,
+  selectedTables: z.array(z.string()).optional(),
+});
+
+export type BackupRequest = z.infer<typeof backupRequestSchema>;
