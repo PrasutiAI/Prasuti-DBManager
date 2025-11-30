@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
@@ -27,18 +29,39 @@ import {
   Columns,
   Key,
   Hash,
-  Type,
   Eye,
   ArrowUpDown,
   Server,
   Loader2,
   AlertCircle,
-  CheckCircle2
+  CheckCircle2,
+  Link,
+  Unlink
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { TableInfo, TableColumn, TableStructure, TableDataPage, DbSelection } from "@shared/schema";
 
+const connectionSchema = z.object({
+  host: z.string().optional(),
+  port: z.string().optional(),
+  database: z.string().optional(),
+  user: z.string().optional(),
+  password: z.string().optional(),
+  connectionString: z.string().optional(),
+}).refine((data) => {
+  if (data.connectionString && data.connectionString.length > 0) return true;
+  return data.host && data.port && data.database && data.user && data.password;
+}, {
+  message: "Please provide either a connection string or all connection details",
+  path: ["connectionString"],
+});
+
+type ConnectionFormValues = z.infer<typeof connectionSchema>;
+
 export default function DatabaseManager() {
+  const [isConnected, setIsConnected] = useState(false);
+  const [connectionMode, setConnectionMode] = useState<"env" | "manual">("env");
+  const [useConnectionString, setUseConnectionString] = useState(true);
   const [selectedDb, setSelectedDb] = useState<DbSelection>("source");
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -55,9 +78,22 @@ export default function DatabaseManager() {
   const [activeTab, setActiveTab] = useState<"tables" | "structure" | "data" | "query">("tables");
   const [sqlQuery, setSqlQuery] = useState("SELECT * FROM ");
   const [queryResult, setQueryResult] = useState<any>(null);
+  const [isConnecting, setIsConnecting] = useState(false);
   
   const { toast } = useToast();
   const queryClient = useQueryClient();
+
+  const connectionForm = useForm<ConnectionFormValues>({
+    resolver: zodResolver(connectionSchema),
+    defaultValues: { 
+      host: "localhost", 
+      port: "5432", 
+      user: "postgres",
+      database: "",
+      password: "",
+      connectionString: "" 
+    }
+  });
 
   // Fetch config status
   const { data: configData } = useQuery({
@@ -67,6 +103,93 @@ export default function DatabaseManager() {
       return res.json();
     }
   });
+
+  // Connect using environment variables
+  const handleEnvConnect = async () => {
+    setIsConnecting(true);
+    try {
+      const res = await fetch("/api/quick-connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" }
+      });
+      
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error);
+      }
+      
+      setIsConnected(true);
+      setConnectionMode("env");
+      toast({
+        title: "Connected",
+        description: "Successfully connected to databases using environment variables"
+      });
+    } catch (error: any) {
+      toast({
+        title: "Connection Failed",
+        description: error.message,
+        variant: "destructive"
+      });
+    } finally {
+      setIsConnecting(false);
+    }
+  };
+
+  // Connect using manual credentials
+  const handleManualConnect = async (values: ConnectionFormValues) => {
+    setIsConnecting(true);
+    try {
+      // Test connection to the provided database
+      const connectionPayload = useConnectionString 
+        ? { connectionString: values.connectionString }
+        : { 
+            host: values.host,
+            port: values.port,
+            database: values.database,
+            user: values.user,
+            password: values.password
+          };
+
+      const res = await fetch("/api/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: connectionPayload,
+          destination: connectionPayload
+        })
+      });
+      
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Connection failed");
+      }
+      
+      setIsConnected(true);
+      setConnectionMode("manual");
+      toast({
+        title: "Connected",
+        description: "Successfully connected to database"
+      });
+    } catch (error: any) {
+      toast({
+        title: "Connection Failed",
+        description: error.message,
+        variant: "destructive"
+      });
+    } finally {
+      setIsConnecting(false);
+    }
+  };
+
+  const handleDisconnect = () => {
+    setIsConnected(false);
+    setSelectedTable(null);
+    queryClient.invalidateQueries({ queryKey: ["tables"] });
+    toast({
+      title: "Disconnected",
+      description: "Database connection closed"
+    });
+  };
 
   // Fetch tables list
   const { data: tablesData, isLoading: tablesLoading, refetch: refetchTables } = useQuery({
@@ -79,7 +202,7 @@ export default function DatabaseManager() {
       }
       return res.json();
     },
-    enabled: true
+    enabled: isConnected && connectionMode === "env"
   });
 
   // Fetch table structure
@@ -94,7 +217,7 @@ export default function DatabaseManager() {
       }
       return res.json() as Promise<TableStructure>;
     },
-    enabled: !!selectedTable
+    enabled: !!selectedTable && isConnected
   });
 
   // Fetch table data
@@ -121,7 +244,7 @@ export default function DatabaseManager() {
       }
       return res.json() as Promise<TableDataPage>;
     },
-    enabled: !!selectedTable && activeTab === "data"
+    enabled: !!selectedTable && activeTab === "data" && isConnected
   });
 
   // Row mutation
@@ -307,6 +430,177 @@ export default function DatabaseManager() {
 
   const tables: TableInfo[] = tablesData?.tables || [];
 
+  // Connection Screen
+  if (!isConnected) {
+    return (
+      <div className="min-h-screen bg-background text-foreground p-6 font-sans">
+        <div className="max-w-2xl mx-auto space-y-6">
+          {/* Header */}
+          <header className="text-center space-y-2">
+            <div className="inline-flex p-4 bg-primary/10 rounded-xl border border-primary/20">
+              <Database className="w-12 h-12 text-primary" />
+            </div>
+            <h1 className="text-3xl font-bold tracking-tight" data-testid="text-page-title">Database Manager</h1>
+            <p className="text-muted-foreground">Connect to your PostgreSQL database to view, edit, and backup your data</p>
+          </header>
+
+          {/* Connection Options */}
+          <div className="space-y-6">
+            {/* Environment Variables Option */}
+            {(configData?.sourceConfigured || configData?.destinationConfigured) && (
+              <Card className="border-2 border-emerald-500/30 bg-emerald-500/5">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-lg">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                    Quick Connect
+                  </CardTitle>
+                  <CardDescription>
+                    Use pre-configured database connections from environment variables
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex items-center gap-4 text-sm">
+                    <Badge variant={configData?.sourceConfigured ? "default" : "secondary"}>
+                      Source: {configData?.sourceConfigured ? "Configured" : "Not set"}
+                    </Badge>
+                    <Badge variant={configData?.destinationConfigured ? "default" : "secondary"}>
+                      Destination: {configData?.destinationConfigured ? "Configured" : "Not set"}
+                    </Badge>
+                  </div>
+                  <Button 
+                    onClick={handleEnvConnect}
+                    disabled={isConnecting || !configData?.sourceConfigured}
+                    className="w-full"
+                    data-testid="button-quick-connect"
+                  >
+                    {isConnecting ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <Link className="w-4 h-4 mr-2" />
+                    )}
+                    Connect with Environment Variables
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Manual Connection Option */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <Server className="w-5 h-5" />
+                  Manual Connection
+                </CardTitle>
+                <CardDescription>
+                  Enter your database credentials to connect
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <form onSubmit={connectionForm.handleSubmit(handleManualConnect)} className="space-y-4">
+                  <Tabs value={useConnectionString ? "string" : "details"} onValueChange={(v) => setUseConnectionString(v === "string")}>
+                    <TabsList className="w-full">
+                      <TabsTrigger value="string" className="flex-1" data-testid="tab-connection-string">
+                        Connection String
+                      </TabsTrigger>
+                      <TabsTrigger value="details" className="flex-1" data-testid="tab-connection-details">
+                        Connection Details
+                      </TabsTrigger>
+                    </TabsList>
+                  </Tabs>
+
+                  {useConnectionString ? (
+                    <div className="space-y-2">
+                      <Label htmlFor="connectionString">Connection String</Label>
+                      <Input
+                        id="connectionString"
+                        placeholder="postgresql://user:password@host:5432/database"
+                        {...connectionForm.register("connectionString")}
+                        data-testid="input-connection-string"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Format: postgresql://user:password@host:port/database
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="host">Host</Label>
+                        <Input
+                          id="host"
+                          placeholder="localhost"
+                          {...connectionForm.register("host")}
+                          data-testid="input-host"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="port">Port</Label>
+                        <Input
+                          id="port"
+                          placeholder="5432"
+                          {...connectionForm.register("port")}
+                          data-testid="input-port"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="database">Database</Label>
+                        <Input
+                          id="database"
+                          placeholder="mydb"
+                          {...connectionForm.register("database")}
+                          data-testid="input-database"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="user">User</Label>
+                        <Input
+                          id="user"
+                          placeholder="postgres"
+                          {...connectionForm.register("user")}
+                          data-testid="input-user"
+                        />
+                      </div>
+                      <div className="col-span-2 space-y-2">
+                        <Label htmlFor="password">Password</Label>
+                        <Input
+                          id="password"
+                          type="password"
+                          placeholder="••••••••"
+                          {...connectionForm.register("password")}
+                          data-testid="input-password"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {connectionForm.formState.errors.connectionString && (
+                    <p className="text-sm text-destructive">
+                      {connectionForm.formState.errors.connectionString.message}
+                    </p>
+                  )}
+
+                  <Button 
+                    type="submit" 
+                    disabled={isConnecting}
+                    className="w-full"
+                    data-testid="button-connect"
+                  >
+                    {isConnecting ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <Link className="w-4 h-4 mr-2" />
+                    )}
+                    Connect
+                  </Button>
+                </form>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Connected - Show Database Manager
   return (
     <div className="min-h-screen bg-background text-foreground p-6 font-sans">
       <div className="max-w-7xl mx-auto space-y-6">
@@ -323,20 +617,22 @@ export default function DatabaseManager() {
             </div>
           </div>
           <div className="flex items-center gap-4">
-            <Select value={selectedDb} onValueChange={(v) => { setSelectedDb(v as DbSelection); setSelectedTable(null); }}>
-              <SelectTrigger className="w-48" data-testid="select-database">
-                <Server className="w-4 h-4 mr-2" />
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="source" data-testid="option-source">
-                  Source (DATABASE_URL_OLD)
-                </SelectItem>
-                <SelectItem value="destination" data-testid="option-destination">
-                  Destination (DATABASE_URL_NEW)
-                </SelectItem>
-              </SelectContent>
-            </Select>
+            {connectionMode === "env" && (
+              <Select value={selectedDb} onValueChange={(v) => { setSelectedDb(v as DbSelection); setSelectedTable(null); }}>
+                <SelectTrigger className="w-48" data-testid="select-database">
+                  <Server className="w-4 h-4 mr-2" />
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="source" data-testid="option-source">
+                    Source Database
+                  </SelectItem>
+                  <SelectItem value="destination" data-testid="option-destination">
+                    Destination Database
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            )}
             <Button 
               variant="outline" 
               onClick={() => refetchTables()}
@@ -352,19 +648,33 @@ export default function DatabaseManager() {
               <Download className="w-4 h-4 mr-2" />
               Backup All
             </Button>
+            <Button 
+              variant="destructive"
+              onClick={handleDisconnect}
+              data-testid="button-disconnect"
+            >
+              <Unlink className="w-4 h-4 mr-2" />
+              Disconnect
+            </Button>
           </div>
         </header>
 
         {/* Status */}
         <div className="flex items-center gap-4">
-          <Badge variant={configData?.sourceConfigured ? "default" : "destructive"} data-testid="status-source">
-            {configData?.sourceConfigured ? <CheckCircle2 className="w-3 h-3 mr-1" /> : <AlertCircle className="w-3 h-3 mr-1" />}
-            Source: {configData?.sourceConfigured ? "Connected" : "Not configured"}
+          <Badge variant="default" className="bg-emerald-500" data-testid="status-connected">
+            <CheckCircle2 className="w-3 h-3 mr-1" />
+            Connected
           </Badge>
-          <Badge variant={configData?.destinationConfigured ? "default" : "secondary"} data-testid="status-destination">
-            {configData?.destinationConfigured ? <CheckCircle2 className="w-3 h-3 mr-1" /> : <AlertCircle className="w-3 h-3 mr-1" />}
-            Destination: {configData?.destinationConfigured ? "Connected" : "Not configured"}
-          </Badge>
+          {connectionMode === "env" && (
+            <>
+              <Badge variant={configData?.sourceConfigured ? "default" : "destructive"} data-testid="status-source">
+                Source: {configData?.sourceConfigured ? "Active" : "Not configured"}
+              </Badge>
+              <Badge variant={configData?.destinationConfigured ? "default" : "secondary"} data-testid="status-destination">
+                Destination: {configData?.destinationConfigured ? "Active" : "Not configured"}
+              </Badge>
+            </>
+          )}
         </div>
 
         {/* Main Content */}
