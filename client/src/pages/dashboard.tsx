@@ -54,7 +54,9 @@ const MOCK_TABLES = [
   { name: "tb_vidyax_payments", rows: 32100, size: "120MB" },
   { name: "orders", rows: 850, size: "5MB" },
   { name: "products", rows: 125000, size: "540MB" },
-  { name: "system_logs", rows: 890000, size: "2.1GB" },
+  { name: "app_logs", rows: 890000, size: "2.1GB" },
+  { name: "pg_stat_activity", rows: 0, size: "0KB" },
+  { name: "information_schema.tables", rows: 0, size: "0KB" },
 ];
 
 export default function DatabaseMigrator() {
@@ -138,7 +140,14 @@ export default function DatabaseMigrator() {
   };
 
   const getFilteredTables = () => {
-    if (!tablePattern) return MOCK_TABLES;
+    // Always exclude system tables
+    let tables = MOCK_TABLES.filter(t => 
+      !t.name.startsWith("pg_") && 
+      !t.name.startsWith("information_schema")
+    );
+
+    if (!tablePattern) return tables;
+    
     try {
       // Convert SQL LIKE pattern to Regex (simple version)
       // Escape special regex characters except % and _
@@ -146,9 +155,9 @@ export default function DatabaseMigrator() {
       // Replace SQL wildcards with Regex equivalents
       const pattern = escaped.replace(/%/g, '.*').replace(/_/g, '.');
       const regex = new RegExp(`^${pattern}$`, 'i');
-      return MOCK_TABLES.filter(t => regex.test(t.name));
+      return tables.filter(t => regex.test(t.name));
     } catch (e) {
-      return MOCK_TABLES;
+      return tables;
     }
   };
 
@@ -359,6 +368,11 @@ export default function DatabaseMigrator() {
                   <Card className="border-primary/20">
                     <CardHeader>
                       <CardTitle>Schema Analysis</CardTitle>
+                      <div className="flex items-center gap-2">
+                         <Badge variant="outline" className="text-xs font-normal text-muted-foreground">
+                           System tables excluded
+                         </Badge>
+                      </div>
                       <CardDescription>Review tables to be replicated</CardDescription>
                     </CardHeader>
                     <CardContent>
