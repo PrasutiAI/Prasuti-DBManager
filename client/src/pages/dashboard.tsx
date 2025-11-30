@@ -361,6 +361,45 @@ export default function DatabaseMigrator() {
     return tables;
   };
 
+  const downloadBackup = async () => {
+    setIsLoading(true);
+    try {
+      const response = await fetch("/api/download-backup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          selectedTables: Array.from(selectedTables),
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Backup generation failed");
+      }
+
+      toast({
+        title: "Downloading Backup",
+        description: "Generating SQL backup of migrated data...",
+      });
+
+      const blob = await response.blob();
+      const element = document.createElement("a");
+      element.href = URL.createObjectURL(blob);
+      element.download = `backup_${new Date().toISOString().split('T')[0]}.sql`;
+      document.body.appendChild(element);
+      element.click();
+      document.body.removeChild(element);
+    } catch (error: any) {
+      toast({
+        title: "Backup Generation Failed",
+        description: error.message,
+        variant: "destructive"
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const downloadScript = async () => {
     setIsLoading(true);
     const sourceValues = sourceForm.getValues();
@@ -960,12 +999,18 @@ if __name__ == "__main__":
                       </div>
 
                       {step === "complete" && (
-                        <div className="flex gap-3">
-                          <Button className="flex-1" variant="outline" onClick={downloadScript}>
-                            <Code className="w-4 h-4 mr-2" />
-                            Download Python Script
-                          </Button>
-                          <Button className="flex-1" variant="secondary" onClick={() => setStep("connect")}>
+                        <div className="flex flex-col gap-3">
+                          <div className="flex gap-3">
+                            <Button className="flex-1" variant="outline" onClick={downloadBackup} disabled={isLoading} data-testid="button-download-backup">
+                              <Download className="w-4 h-4 mr-2" />
+                              Download Backup (SQL)
+                            </Button>
+                            <Button className="flex-1" variant="outline" onClick={downloadScript} disabled={isLoading} data-testid="button-download-script">
+                              <Code className="w-4 h-4 mr-2" />
+                              Download Python Script
+                            </Button>
+                          </div>
+                          <Button className="w-full" variant="secondary" onClick={() => setStep("connect")}>
                             Start New Migration
                           </Button>
                         </div>

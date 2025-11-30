@@ -572,6 +572,95 @@ if __name__ == "__main__":
     }
   });
 
+  // Generate and download SQL backup
+  app.post("/api/download-backup", async (req, res) => {
+    const destUrl = process.env.DATABASE_URL_NEW;
+    const { selectedTables } = req.body;
+
+    if (!destUrl) {
+      return res.status(400).json({ error: "DATABASE_URL_NEW not configured" });
+    }
+
+    try {
+      const sql = neon(destUrl);
+
+      // Get list of tables to backup
+      let tables = await sql`
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+      `;
+
+      let tablesToBackup = tables.map((t: any) => t.table_name);
+
+      // If specific tables provided, use those
+      if (selectedTables && selectedTables.length > 0) {
+        tablesToBackup = tablesToBackup.filter((name: string) => selectedTables.includes(name));
+      }
+
+      let sqlDump = "-- Database Backup\n";
+      sqlDump += `-- Generated: ${new Date().toISOString()}\n`;
+      sqlDump += "-- Format: SQL\n\n";
+
+      // Dump each table
+      for (const tableName of tablesToBackup) {
+        try {
+          // Get table structure
+          const columns = await sql`
+            SELECT column_name, data_type, is_nullable, column_default, character_maximum_length
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = ${tableName}
+            ORDER BY ordinal_position
+          `;
+
+          // Build CREATE TABLE
+          const columnDefs = columns.map((col: any) => {
+            let def = `"${col.column_name}" ${col.data_type}`;
+            if (col.character_maximum_length) {
+              def += `(${col.character_maximum_length})`;
+            }
+            if (col.is_nullable === 'NO') {
+              def += ' NOT NULL';
+            }
+            if (col.column_default) {
+              def += ` DEFAULT ${col.column_default}`;
+            }
+            return def;
+          }).join(',\n  ');
+
+          sqlDump += `\n-- Table: ${tableName}\n`;
+          sqlDump += `DROP TABLE IF EXISTS "${tableName}" CASCADE;\n`;
+          sqlDump += `CREATE TABLE "${tableName}" (\n  ${columnDefs}\n);\n`;
+
+          // Get data
+          const data = await sql(`SELECT * FROM "${tableName}"`);
+
+          if (data.length > 0) {
+            sqlDump += `\n-- Data for ${tableName}\n`;
+            for (const row of data) {
+              const cols = Object.keys(row);
+              const vals = cols.map(c => {
+                const val = row[c];
+                if (val === null) return 'NULL';
+                if (typeof val === 'string') return `'${val.replace(/'/g, "''")}'`;
+                return val;
+              });
+              sqlDump += `INSERT INTO "${tableName}" (${cols.map(c => `"${c}"`).join(', ')}) VALUES (${vals.join(', ')});\n`;
+            }
+          }
+        } catch (error: any) {
+          sqlDump += `\n-- Error dumping table ${tableName}: ${error.message}\n`;
+        }
+      }
+
+      res.setHeader('Content-Type', 'text/plain');
+      res.setHeader('Content-Disposition', `attachment; filename="backup_${new Date().toISOString().split('T')[0]}.sql"`);
+      res.send(sqlDump);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   return httpServer;
 }
 
