@@ -47,17 +47,18 @@ type ConnectionFormValues = z.infer<typeof connectionSchema>;
 
 // Mock Tables for visualization
 const MOCK_TABLES = [
-  { name: "users", rows: 15420, size: "45MB" },
-  { name: "orders", rows: 32100, size: "120MB" },
-  { name: "products", rows: 850, size: "5MB" },
-  { name: "transactions", rows: 125000, size: "540MB" },
-  { name: "logs", rows: 890000, size: "2.1GB" },
+  { name: "tb_vidyax_users", rows: 15420, size: "45MB" },
+  { name: "tb_vidyax_payments", rows: 32100, size: "120MB" },
+  { name: "orders", rows: 850, size: "5MB" },
+  { name: "products", rows: 125000, size: "540MB" },
+  { name: "system_logs", rows: 890000, size: "2.1GB" },
 ];
 
 export default function DatabaseMigrator() {
   const [step, setStep] = useState<"connect" | "analyze" | "migrating" | "complete">("connect");
   const [logs, setLogs] = useState<string[]>([]);
   const [progress, setProgress] = useState(0);
+  const [tablePattern, setTablePattern] = useState("");
   const { toast } = useToast();
 
   const sourceForm = useForm<ConnectionFormValues>({
@@ -85,7 +86,7 @@ export default function DatabaseMigrator() {
       setTimeout(() => addLog("Attempting connection to destination database..."), 1200);
       setTimeout(() => addLog("Destination connection established."), 1800);
       setTimeout(() => addLog("Analyzing schema..."), 2200);
-      setTimeout(() => addLog("Found 5 tables to migrate."), 2800);
+      setTimeout(() => addLog(`Found ${getFilteredTables().length} tables matching pattern.`), 2800);
     } else {
       toast({
         title: "Invalid Configuration",
@@ -98,6 +99,8 @@ export default function DatabaseMigrator() {
   const startMigration = () => {
     setStep("migrating");
     addLog("Starting migration process...");
+    
+    const tablesToMigrate = getFilteredTables();
     
     let currentProgress = 0;
     const interval = setInterval(() => {
@@ -115,11 +118,26 @@ export default function DatabaseMigrator() {
       setProgress(currentProgress);
       
       // Random log generation during progress
-      if (Math.random() > 0.7) {
-        const table = MOCK_TABLES[Math.floor(Math.random() * MOCK_TABLES.length)];
+      if (Math.random() > 0.7 && tablesToMigrate.length > 0) {
+        const table = tablesToMigrate[Math.floor(Math.random() * tablesToMigrate.length)];
         addLog(`Copying table '${table.name}'... processed ${Math.floor(Math.random() * table.rows)} rows.`);
       }
     }, 800);
+  };
+
+  const getFilteredTables = () => {
+    if (!tablePattern) return MOCK_TABLES;
+    try {
+      // Convert SQL LIKE pattern to Regex (simple version)
+      // Escape special regex characters except % and _
+      const escaped = tablePattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+      // Replace SQL wildcards with Regex equivalents
+      const pattern = escaped.replace(/%/g, '.*').replace(/_/g, '.');
+      const regex = new RegExp(`^${pattern}$`, 'i');
+      return MOCK_TABLES.filter(t => regex.test(t.name));
+    } catch (e) {
+      return MOCK_TABLES;
+    }
   };
 
   const downloadScript = () => {
@@ -290,6 +308,29 @@ export default function DatabaseMigrator() {
                     </Card>
                   </div>
 
+                  {/* Migration Settings */}
+                  <Card className="border-primary/20">
+                    <CardHeader>
+                      <CardTitle className="text-lg">Migration Settings</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-2">
+                        <Label>Table Filter Pattern (Optional)</Label>
+                        <div className="flex gap-4">
+                          <Input 
+                            value={tablePattern}
+                            onChange={(e) => setTablePattern(e.target.value)}
+                            placeholder="e.g. tb_vidyax%" 
+                            className="font-mono text-sm max-w-md" 
+                          />
+                          <div className="flex items-center text-sm text-muted-foreground">
+                            <span className="text-xs">Use % for wildcards (e.g. tb_%, %_logs)</span>
+                          </div>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+
                   <Button size="lg" className="w-full text-md" onClick={handleConnect}>
                     <Terminal className="w-4 h-4 mr-2" />
                     Test Connections & Analyze Schema
@@ -310,18 +351,24 @@ export default function DatabaseMigrator() {
                     </CardHeader>
                     <CardContent>
                       <div className="space-y-2">
-                        {MOCK_TABLES.map((table, i) => (
-                          <div key={i} className="flex items-center justify-between p-3 bg-muted/30 rounded-md border border-border/50">
-                            <div className="flex items-center gap-3">
-                              <TableIcon className="w-4 h-4 text-primary" />
-                              <span className="font-mono text-sm">{table.name}</span>
-                            </div>
-                            <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                              <span>{table.rows.toLocaleString()} rows</span>
-                              <span className="w-16 text-right">{table.size}</span>
-                            </div>
+                        {getFilteredTables().length === 0 ? (
+                          <div className="p-8 text-center text-muted-foreground border border-dashed border-border rounded-lg">
+                            No tables found matching pattern "{tablePattern}"
                           </div>
-                        ))}
+                        ) : (
+                          getFilteredTables().map((table, i) => (
+                            <div key={i} className="flex items-center justify-between p-3 bg-muted/30 rounded-md border border-border/50">
+                              <div className="flex items-center gap-3">
+                                <TableIcon className="w-4 h-4 text-primary" />
+                                <span className="font-mono text-sm">{table.name}</span>
+                              </div>
+                              <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                                <span>{table.rows.toLocaleString()} rows</span>
+                                <span className="w-16 text-right">{table.size}</span>
+                              </div>
+                            </div>
+                          ))
+                        )}
                       </div>
                     </CardContent>
                   </Card>
