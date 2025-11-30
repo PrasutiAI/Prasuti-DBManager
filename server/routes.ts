@@ -170,7 +170,7 @@ export async function registerRoutes(
   app.post("/api/quick-migrate", async (req, res) => {
     const sourceUrl = process.env.DATABASE_URL_OLD;
     const destUrl = process.env.DATABASE_URL_NEW;
-    const { tablePattern } = req.body;
+    const { tablePattern, selectedTables, tableDataFlags } = req.body;
 
     if (!sourceUrl || !destUrl) {
       return res.status(400).json({ error: "Database URLs not configured" });
@@ -187,10 +187,15 @@ export async function registerRoutes(
         WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
       `;
 
-      const tablesToMigrate = tables
+      let tablesToMigrate = tables
         .map((t: any) => t.table_name)
         .filter((name: string) => !isSystemTable(name))
         .filter((name: string) => matchesPattern(name, tablePattern));
+
+      // If specific tables selected, filter to those
+      if (selectedTables && selectedTables.length > 0) {
+        tablesToMigrate = tablesToMigrate.filter((name: string) => selectedTables.includes(name));
+      }
 
       const results: any[] = [];
 
@@ -223,17 +228,21 @@ export async function registerRoutes(
           await destSql(`DROP TABLE IF EXISTS "${tableName}" CASCADE`);
           await destSql(`CREATE TABLE "${tableName}" (${columnDefs})`);
 
-          // Copy data
-          const data = await sourceSql(`SELECT * FROM "${tableName}"`);
-          
+          // Check if should copy data for this table
+          const shouldCopyData = tableDataFlags && tableDataFlags[tableName] !== false;
+
           let rowsCopied = 0;
-          for (const row of data) {
-            const cols = Object.keys(row);
-            const vals = Object.values(row);
-            const placeholders = cols.map((_, i) => `$${i + 1}`).join(', ');
-            const colNames = cols.map(c => `"${c}"`).join(', ');
-            await destSql(`INSERT INTO "${tableName}" (${colNames}) VALUES (${placeholders})`, vals);
-            rowsCopied++;
+          if (shouldCopyData) {
+            const data = await sourceSql(`SELECT * FROM "${tableName}"`);
+            
+            for (const row of data) {
+              const cols = Object.keys(row);
+              const vals = Object.values(row);
+              const placeholders = cols.map((_, i) => `$${i + 1}`).join(', ');
+              const colNames = cols.map(c => `"${c}"`).join(', ');
+              await destSql(`INSERT INTO "${tableName}" (${colNames}) VALUES (${placeholders})`, vals);
+              rowsCopied++;
+            }
           }
 
           results.push({ table: tableName, status: 'success', rowsCopied });

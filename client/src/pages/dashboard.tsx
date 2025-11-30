@@ -70,6 +70,9 @@ export default function DatabaseMigrator() {
   const [hasEnvConfig, setHasEnvConfig] = useState(false);
   const [useEnvVars, setUseEnvVars] = useState(false);
   const [migrationResults, setMigrationResults] = useState<any[]>([]);
+  const [migrationMode, setMigrationMode] = useState<"schema-only" | "schema-data">("schema-data");
+  const [selectedTables, setSelectedTables] = useState<Set<string>>(new Set());
+  const [tableDataFlags, setTableDataFlags] = useState<Map<string, boolean>>(new Map());
   const { toast } = useToast();
 
   const sourceForm = useForm<ConnectionFormValues>({
@@ -95,6 +98,41 @@ export default function DatabaseMigrator() {
       })
       .catch(() => {});
   }, []);
+
+  // Initialize table selections when tables change
+  useEffect(() => {
+    if (tables.length > 0 && selectedTables.size === 0) {
+      const newSelected = new Set(tables.map(t => t.name));
+      const newFlags = new Map(tables.map(t => [t.name, migrationMode === "schema-data"]));
+      setSelectedTables(newSelected);
+      setTableDataFlags(newFlags);
+    }
+  }, [tables]);
+
+  const toggleTableSelection = (tableName: string) => {
+    const newSet = new Set(selectedTables);
+    if (newSet.has(tableName)) {
+      newSet.delete(tableName);
+    } else {
+      newSet.add(tableName);
+    }
+    setSelectedTables(newSet);
+  };
+
+  const toggleTableDataFlag = (tableName: string) => {
+    const newMap = new Map(tableDataFlags);
+    newMap.set(tableName, !newMap.get(tableName));
+    setTableDataFlags(newMap);
+  };
+
+  const setAllTableMode = (includeData: boolean) => {
+    tables.forEach(t => {
+      selectedTables.add(t.name);
+      tableDataFlags.set(t.name, includeData);
+    });
+    setSelectedTables(new Set(selectedTables));
+    setTableDataFlags(new Map(tableDataFlags));
+  };
 
   const addLog = (message: string) => {
     setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${message}`]);
@@ -252,7 +290,11 @@ export default function DatabaseMigrator() {
         const response = await fetch("/api/quick-migrate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ tablePattern }),
+          body: JSON.stringify({ 
+            tablePattern,
+            selectedTables: Array.from(selectedTables),
+            tableDataFlags: Object.fromEntries(tableDataFlags)
+          }),
         });
 
         if (!response.ok) {
@@ -672,7 +714,7 @@ if __name__ == "__main__":
                     <CardHeader>
                       <CardTitle className="text-lg">Migration Settings</CardTitle>
                     </CardHeader>
-                    <CardContent>
+                    <CardContent className="space-y-4">
                       <div className="space-y-2">
                         <Label>Table Filter Pattern (Optional)</Label>
                         <div className="flex gap-4">
@@ -686,6 +728,37 @@ if __name__ == "__main__":
                             <span className="text-xs">Use % for wildcards (e.g. tb_%, %_logs)</span>
                           </div>
                         </div>
+                      </div>
+                      
+                      <Separator />
+                      
+                      <div className="space-y-3">
+                        <Label>Migration Mode (Bulk Setting)</Label>
+                        <div className="flex gap-2">
+                          <Button 
+                            variant={migrationMode === "schema-only" ? "default" : "outline"}
+                            size="sm"
+                            onClick={() => {
+                              setMigrationMode("schema-only");
+                              setAllTableMode(false);
+                            }}
+                          >
+                            Schema Only
+                          </Button>
+                          <Button 
+                            variant={migrationMode === "schema-data" ? "default" : "outline"}
+                            size="sm"
+                            onClick={() => {
+                              setMigrationMode("schema-data");
+                              setAllTableMode(true);
+                            }}
+                          >
+                            Schema + Data
+                          </Button>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Choose bulk setting, then customize per table below
+                        </p>
                       </div>
                     </CardContent>
                   </Card>
@@ -730,15 +803,39 @@ if __name__ == "__main__":
                           </div>
                         ) : (
                           getFilteredTables().map((table, i) => (
-                            <div key={i} className="flex items-center justify-between p-3 bg-muted/30 rounded-md border border-border/50">
-                              <div className="flex items-center gap-3">
-                                <TableIcon className="w-4 h-4 text-primary" />
-                                <span className="font-mono text-sm">{table.name}</span>
+                            <div key={i} className={`p-3 rounded-md border transition-colors ${
+                              selectedTables.has(table.name) 
+                                ? 'bg-primary/10 border-primary/50' 
+                                : 'bg-muted/30 border-border/50 opacity-50'
+                            }`}>
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="flex items-center gap-3 flex-1">
+                                  <input 
+                                    type="checkbox"
+                                    checked={selectedTables.has(table.name)}
+                                    onChange={() => toggleTableSelection(table.name)}
+                                    className="w-4 h-4 rounded cursor-pointer"
+                                    data-testid={`checkbox-table-${table.name}`}
+                                  />
+                                  <TableIcon className="w-4 h-4 text-primary" />
+                                  <span className="font-mono text-sm">{table.name}</span>
+                                  <span className="text-xs text-muted-foreground ml-auto">{table.rows.toLocaleString()} rows • {table.size}</span>
+                                </div>
                               </div>
-                              <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                                <span>{table.rows.toLocaleString()} rows</span>
-                                <span className="w-16 text-right">{table.size}</span>
-                              </div>
+                              
+                              {selectedTables.has(table.name) && (
+                                <div className="mt-2 ml-7 flex gap-2">
+                                  <Button
+                                    variant={tableDataFlags.get(table.name) ? "default" : "outline"}
+                                    size="sm"
+                                    onClick={() => toggleTableDataFlag(table.name)}
+                                    className="text-xs h-7"
+                                    data-testid={`button-data-${table.name}`}
+                                  >
+                                    {tableDataFlags.get(table.name) ? "✓ With Data" : "Schema Only"}
+                                  </Button>
+                                </div>
+                              )}
                             </div>
                           ))
                         )}
