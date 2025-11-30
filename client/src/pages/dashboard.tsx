@@ -64,6 +64,9 @@ export default function DatabaseMigrator() {
   const [logs, setLogs] = useState<string[]>([]);
   const [progress, setProgress] = useState(0);
   const [tablePattern, setTablePattern] = useState("");
+  const [tables, setTables] = useState<typeof MOCK_TABLES>([]);
+  const [dryRunPlan, setDryRunPlan] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
 
   const sourceForm = useForm<ConnectionFormValues>({
@@ -84,30 +87,107 @@ export default function DatabaseMigrator() {
     const sourceValid = await sourceForm.trigger();
     const destValid = await destForm.trigger();
 
-    if (sourceValid && destValid) {
-      setStep("analyze");
-      addLog("Attempting connection to source database...");
-      setTimeout(() => addLog("Source connection established."), 800);
-      setTimeout(() => addLog("Attempting connection to destination database..."), 1200);
-      setTimeout(() => addLog("Destination connection established."), 1800);
-      setTimeout(() => addLog("Analyzing schema..."), 2200);
-      setTimeout(() => addLog(`Found ${getFilteredTables().length} tables matching pattern.`), 2800);
-    } else {
+    if (!sourceValid || !destValid) {
       toast({
         title: "Invalid Configuration",
         description: "Please check your connection details.",
         variant: "destructive"
       });
+      return;
+    }
+
+    setIsLoading(true);
+    addLog("Attempting connection to source database...");
+
+    try {
+      // Test connections
+      const connectResponse = await fetch("/api/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: sourceForm.getValues(),
+          destination: destForm.getValues(),
+        }),
+      });
+
+      if (!connectResponse.ok) {
+        const error = await connectResponse.json();
+        throw new Error(error.error || "Connection failed");
+      }
+
+      addLog("Source connection established.");
+      addLog("Destination connection established.");
+      addLog("Analyzing schema...");
+
+      // Analyze source database
+      const analyzeResponse = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: sourceForm.getValues(),
+          destination: destForm.getValues(),
+          tablePattern,
+        }),
+      });
+
+      if (!analyzeResponse.ok) {
+        const error = await analyzeResponse.json();
+        throw new Error(error.error || "Analysis failed");
+      }
+
+      const { tables: analyzedTables } = await analyzeResponse.json();
+      setTables(analyzedTables);
+      addLog(`Found ${analyzedTables.length} tables matching pattern.`);
+      setStep("analyze");
+    } catch (error: any) {
+      addLog(`Error: ${error.message}`);
+      toast({
+        title: "Connection Failed",
+        description: error.message,
+        variant: "destructive"
+      });
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const startDryRun = () => {
-    setStep("dryrun");
+  const startDryRun = async () => {
+    setIsLoading(true);
     addLog("Starting dry run analysis...");
-    setTimeout(() => addLog("Checking destination constraints..."), 500);
-    setTimeout(() => addLog("Verifying schema compatibility..."), 1000);
-    setTimeout(() => addLog("Calculating storage requirements..."), 1500);
-    setTimeout(() => addLog("Dry run analysis complete."), 2000);
+
+    try {
+      const response = await fetch("/api/dry-run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: sourceForm.getValues(),
+          destination: destForm.getValues(),
+          tablePattern,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Dry run failed");
+      }
+
+      const { plan } = await response.json();
+      setDryRunPlan(plan);
+      addLog("Checking destination constraints...");
+      addLog("Verifying schema compatibility...");
+      addLog("Calculating storage requirements...");
+      addLog("Dry run analysis complete.");
+      setStep("dryrun");
+    } catch (error: any) {
+      addLog(`Error: ${error.message}`);
+      toast({
+        title: "Dry Run Failed",
+        description: error.message,
+        variant: "destructive"
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const startMigration = () => {
@@ -140,32 +220,60 @@ export default function DatabaseMigrator() {
   };
 
   const getFilteredTables = () => {
-    // Always exclude system tables
-    let tables = MOCK_TABLES.filter(t => 
-      !t.name.startsWith("pg_") && 
-      !t.name.startsWith("information_schema")
-    );
+    return tables;
+  };
 
-    if (!tablePattern) return tables;
-    
+  const downloadScript = async () => {
+    setIsLoading(true);
+    const sourceValues = sourceForm.getValues();
+    const destValues = destForm.getValues();
+
     try {
-      // Convert SQL LIKE pattern to Regex (simple version)
-      // Escape special regex characters except % and _
-      const escaped = tablePattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-      // Replace SQL wildcards with Regex equivalents
-      const pattern = escaped.replace(/%/g, '.*').replace(/_/g, '.');
-      const regex = new RegExp(`^${pattern}$`, 'i');
-      return tables.filter(t => regex.test(t.name));
-    } catch (e) {
-      return tables;
+      // Generate script from backend
+      const response = await fetch("/api/generate-script", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: sourceValues,
+          destination: destValues,
+          tablePattern,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Script generation failed");
+      }
+
+      const { script: scriptContent } = await response.json();
+
+      toast({
+        title: "Downloading Script",
+        description: "Generating Python migration script with your configuration...",
+      });
+
+      const element = document.createElement("a");
+      const file = new Blob([scriptContent], {type: 'text/plain'});
+      element.href = URL.createObjectURL(file);
+      element.download = "db_replicator.py";
+      document.body.appendChild(element);
+      element.click();
+      document.body.removeChild(element);
+    } catch (error: any) {
+      toast({
+        title: "Script Generation Failed",
+        description: error.message,
+        variant: "destructive"
+      });
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const downloadScript = () => {
+  // Keep old client-side script generation as fallback (unused now)
+  const _generateScriptClientSide = () => {
     const sourceValues = sourceForm.getValues();
     const destValues = destForm.getValues();
-    
-    // Generate a real, usable Python script based on current configuration
     const scriptContent = `
 import psycopg2
 import sys
@@ -278,21 +386,6 @@ def migrate():
 if __name__ == "__main__":
     migrate()
 `;
-
-    toast({
-      title: "Downloading Script",
-      description: "Generating Python migration script with your configuration...",
-    });
-    
-    setTimeout(() => {
-      const element = document.createElement("a");
-      const file = new Blob([scriptContent], {type: 'text/plain'});
-      element.href = URL.createObjectURL(file);
-      element.download = "db_replicator.py";
-      document.body.appendChild(element);
-      element.click();
-      document.body.removeChild(element);
-    }, 1000);
   };
 
   return (
@@ -471,9 +564,18 @@ if __name__ == "__main__":
                     </CardContent>
                   </Card>
 
-                  <Button size="lg" className="w-full text-md" onClick={handleConnect}>
-                    <Terminal className="w-4 h-4 mr-2" />
-                    Test Connections & Analyze Schema
+                  <Button size="lg" className="w-full text-md" onClick={handleConnect} disabled={isLoading}>
+                    {isLoading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Connecting...
+                      </>
+                    ) : (
+                      <>
+                        <Terminal className="w-4 h-4 mr-2" />
+                        Test Connections & Analyze Schema
+                      </>
+                    )}
                   </Button>
                 </motion.div>
               )}
@@ -520,8 +622,8 @@ if __name__ == "__main__":
                   
                   <div className="flex gap-4">
                     <Button variant="outline" onClick={() => setStep("connect")}>Back</Button>
-                    <Button variant="secondary" className="flex-1" onClick={startDryRun}>
-                      <Eye className="w-4 h-4 mr-2" />
+                    <Button variant="secondary" className="flex-1" onClick={startDryRun} disabled={isLoading}>
+                      {isLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Eye className="w-4 h-4 mr-2" />}
                       Dry Run Analysis
                     </Button>
                     <Button className="flex-1" onClick={startMigration}>
@@ -562,13 +664,19 @@ if __name__ == "__main__":
 
                          <div className="space-y-2">
                             <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Execution Plan</h4>
-                            <div className="bg-black/40 rounded-md border border-border/50 font-mono text-xs p-4 space-y-1 overflow-x-auto">
-                               {getFilteredTables().map((table) => (
-                                 <div key={table.name} className="space-y-1 mb-3 last:mb-0">
-                                   <div className="text-blue-400">-- Table: {table.name}</div>
-                                   <div className="text-red-400">DROP TABLE IF EXISTS public.{table.name} CASCADE;</div>
-                                   <div className="text-green-400">CREATE TABLE public.{table.name} (...);</div>
-                                   <div className="text-muted-foreground">-- Will copy {table.rows.toLocaleString()} rows (~{table.size})</div>
+                            <div className="bg-black/40 rounded-md border border-border/50 font-mono text-xs p-4 space-y-1 overflow-x-auto max-h-96 overflow-y-auto">
+                               {dryRunPlan.map((item) => (
+                                 <div key={item.tableName} className="space-y-1 mb-3 last:mb-0">
+                                   <div className="text-blue-400">-- Table: {item.tableName}</div>
+                                   {item.actions.map((action: string, idx: number) => (
+                                     <div key={idx} className={
+                                       action.startsWith('DROP') ? 'text-red-400' :
+                                       action.startsWith('CREATE') ? 'text-green-400' :
+                                       'text-muted-foreground'
+                                     }>
+                                       {action}
+                                     </div>
+                                   ))}
                                  </div>
                                ))}
                             </div>
