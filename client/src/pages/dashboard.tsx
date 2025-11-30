@@ -361,6 +361,46 @@ export default function DatabaseMigrator() {
     return tables;
   };
 
+  const downloadSourceBackup = async () => {
+    setIsLoading(true);
+    try {
+      const response = await fetch("/api/download-source-backup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          selectedTables: Array.from(selectedTables),
+          tablePattern,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Backup generation failed");
+      }
+
+      toast({
+        title: "Downloading Source Backup",
+        description: "Generating SQL backup of original data...",
+      });
+
+      const blob = await response.blob();
+      const element = document.createElement("a");
+      element.href = URL.createObjectURL(blob);
+      element.download = `backup_source_${new Date().toISOString().split('T')[0]}.sql`;
+      document.body.appendChild(element);
+      element.click();
+      document.body.removeChild(element);
+    } catch (error: any) {
+      toast({
+        title: "Backup Generation Failed",
+        description: error.message,
+        variant: "destructive"
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const downloadBackup = async () => {
     setIsLoading(true);
     try {
@@ -884,6 +924,10 @@ if __name__ == "__main__":
                   
                   <div className="flex gap-4">
                     <Button variant="outline" onClick={() => setStep("connect")}>Back</Button>
+                    <Button variant="outline" className="flex-1" onClick={downloadSourceBackup} disabled={isLoading} data-testid="button-backup-source">
+                      {isLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+                      Download Source Backup
+                    </Button>
                     <Button variant="secondary" className="flex-1" onClick={startDryRun} disabled={isLoading}>
                       {isLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Eye className="w-4 h-4 mr-2" />}
                       Dry Run Analysis
@@ -949,6 +993,10 @@ if __name__ == "__main__":
 
                   <div className="flex gap-4">
                     <Button variant="outline" onClick={() => setStep("analyze")}>Back to Analysis</Button>
+                    <Button variant="outline" onClick={downloadSourceBackup} disabled={isLoading} data-testid="button-backup-dryrun">
+                      {isLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+                      Download Source Backup
+                    </Button>
                     <Button className="flex-1" onClick={startMigration}>
                       <Play className="w-4 h-4 mr-2" />
                       Confirm & Execute
