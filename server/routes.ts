@@ -86,8 +86,8 @@ export async function registerRoutes(
       const sql = neon(sourceUrl);
       const tables = await sql`
         SELECT 
-          schemaname || '.' || tablename as table_name,
-          pg_total_relation_size(schemaname || '.' || tablename) as size_bytes,
+          schemaname || '.' || relname as table_name,
+          pg_total_relation_size(schemaname || '.' || relname) as size_bytes,
           n_live_tup as row_count
         FROM pg_stat_user_tables
         WHERE schemaname = 'public'
