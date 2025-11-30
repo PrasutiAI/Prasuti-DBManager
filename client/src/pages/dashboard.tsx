@@ -67,6 +67,9 @@ export default function DatabaseMigrator() {
   const [tables, setTables] = useState<typeof MOCK_TABLES>([]);
   const [dryRunPlan, setDryRunPlan] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [hasEnvConfig, setHasEnvConfig] = useState(false);
+  const [useEnvVars, setUseEnvVars] = useState(false);
+  const [migrationResults, setMigrationResults] = useState<any[]>([]);
   const { toast } = useToast();
 
   const sourceForm = useForm<ConnectionFormValues>({
@@ -79,66 +82,113 @@ export default function DatabaseMigrator() {
     defaultValues: { host: "production-db.aws.com", port: "5432", user: "admin", connectionString: "" }
   });
 
+  // Check for environment variables on mount
+  useEffect(() => {
+    fetch("/api/config")
+      .then(res => res.json())
+      .then(data => {
+        setHasEnvConfig(data.hasEnvConfig);
+        if (data.hasEnvConfig) {
+          setUseEnvVars(true);
+          addLog("Environment variables detected: DATABASE_URL_OLD, DATABASE_URL_NEW");
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   const addLog = (message: string) => {
     setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${message}`]);
   };
 
   const handleConnect = async () => {
-    const sourceValid = await sourceForm.trigger();
-    const destValid = await destForm.trigger();
-
-    if (!sourceValid || !destValid) {
-      toast({
-        title: "Invalid Configuration",
-        description: "Please check your connection details.",
-        variant: "destructive"
-      });
-      return;
-    }
-
     setIsLoading(true);
     addLog("Attempting connection to source database...");
 
     try {
-      // Test connections
-      const connectResponse = await fetch("/api/connect", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          source: sourceForm.getValues(),
-          destination: destForm.getValues(),
-        }),
-      });
+      if (useEnvVars) {
+        // Use environment variables
+        const connectResponse = await fetch("/api/quick-connect", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        });
 
-      if (!connectResponse.ok) {
-        const error = await connectResponse.json();
-        throw new Error(error.error || "Connection failed");
+        if (!connectResponse.ok) {
+          const error = await connectResponse.json();
+          throw new Error(error.error || "Connection failed");
+        }
+
+        addLog("Source connection established (DATABASE_URL_OLD).");
+        addLog("Destination connection established (DATABASE_URL_NEW).");
+        addLog("Analyzing schema...");
+
+        const analyzeResponse = await fetch("/api/quick-analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tablePattern }),
+        });
+
+        if (!analyzeResponse.ok) {
+          const error = await analyzeResponse.json();
+          throw new Error(error.error || "Analysis failed");
+        }
+
+        const { tables: analyzedTables } = await analyzeResponse.json();
+        setTables(analyzedTables);
+        addLog(`Found ${analyzedTables.length} tables matching pattern.`);
+        setStep("analyze");
+      } else {
+        // Use form values
+        const sourceValid = await sourceForm.trigger();
+        const destValid = await destForm.trigger();
+
+        if (!sourceValid || !destValid) {
+          toast({
+            title: "Invalid Configuration",
+            description: "Please check your connection details.",
+            variant: "destructive"
+          });
+          setIsLoading(false);
+          return;
+        }
+
+        const connectResponse = await fetch("/api/connect", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            source: sourceForm.getValues(),
+            destination: destForm.getValues(),
+          }),
+        });
+
+        if (!connectResponse.ok) {
+          const error = await connectResponse.json();
+          throw new Error(error.error || "Connection failed");
+        }
+
+        addLog("Source connection established.");
+        addLog("Destination connection established.");
+        addLog("Analyzing schema...");
+
+        const analyzeResponse = await fetch("/api/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            source: sourceForm.getValues(),
+            destination: destForm.getValues(),
+            tablePattern,
+          }),
+        });
+
+        if (!analyzeResponse.ok) {
+          const error = await analyzeResponse.json();
+          throw new Error(error.error || "Analysis failed");
+        }
+
+        const { tables: analyzedTables } = await analyzeResponse.json();
+        setTables(analyzedTables);
+        addLog(`Found ${analyzedTables.length} tables matching pattern.`);
+        setStep("analyze");
       }
-
-      addLog("Source connection established.");
-      addLog("Destination connection established.");
-      addLog("Analyzing schema...");
-
-      // Analyze source database
-      const analyzeResponse = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          source: sourceForm.getValues(),
-          destination: destForm.getValues(),
-          tablePattern,
-        }),
-      });
-
-      if (!analyzeResponse.ok) {
-        const error = await analyzeResponse.json();
-        throw new Error(error.error || "Analysis failed");
-      }
-
-      const { tables: analyzedTables } = await analyzeResponse.json();
-      setTables(analyzedTables);
-      addLog(`Found ${analyzedTables.length} tables matching pattern.`);
-      setStep("analyze");
     } catch (error: any) {
       addLog(`Error: ${error.message}`);
       toast({
@@ -156,14 +206,15 @@ export default function DatabaseMigrator() {
     addLog("Starting dry run analysis...");
 
     try {
-      const response = await fetch("/api/dry-run", {
+      const endpoint = useEnvVars ? "/api/quick-dry-run" : "/api/dry-run";
+      const body = useEnvVars 
+        ? { tablePattern }
+        : { source: sourceForm.getValues(), destination: destForm.getValues(), tablePattern };
+
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          source: sourceForm.getValues(),
-          destination: destForm.getValues(),
-          tablePattern,
-        }),
+        body: JSON.stringify(body),
       });
 
       if (!response.ok) {
@@ -190,33 +241,78 @@ export default function DatabaseMigrator() {
     }
   };
 
-  const startMigration = () => {
+  const startMigration = async () => {
     setStep("migrating");
+    setProgress(0);
     addLog("Starting migration process...");
-    
-    const tablesToMigrate = getFilteredTables();
-    
-    let currentProgress = 0;
-    const interval = setInterval(() => {
-      currentProgress += Math.random() * 10;
-      if (currentProgress >= 100) {
-        currentProgress = 100;
-        clearInterval(interval);
+
+    try {
+      if (useEnvVars) {
+        // Real migration using environment variables
+        const response = await fetch("/api/quick-migrate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tablePattern }),
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.error || "Migration failed");
+        }
+
+        const { results } = await response.json();
+        setMigrationResults(results);
+        
+        // Log results
+        for (const result of results) {
+          if (result.status === 'success') {
+            addLog(`Table '${result.table}': copied ${result.rowsCopied} rows successfully.`);
+          } else {
+            addLog(`Table '${result.table}': ERROR - ${result.error}`);
+          }
+        }
+
+        setProgress(100);
         setStep("complete");
         addLog("Migration completed successfully.");
         toast({
           title: "Migration Complete",
-          description: "All tables and data have been replicated.",
+          description: `${results.filter((r: any) => r.status === 'success').length} tables replicated successfully.`,
         });
+      } else {
+        // Simulated migration for manual connections
+        const tablesToMigrate = getFilteredTables();
+        
+        let currentProgress = 0;
+        const interval = setInterval(() => {
+          currentProgress += Math.random() * 10;
+          if (currentProgress >= 100) {
+            currentProgress = 100;
+            clearInterval(interval);
+            setStep("complete");
+            addLog("Migration completed successfully.");
+            toast({
+              title: "Migration Complete",
+              description: "All tables and data have been replicated.",
+            });
+          }
+          setProgress(currentProgress);
+          
+          if (Math.random() > 0.7 && tablesToMigrate.length > 0) {
+            const table = tablesToMigrate[Math.floor(Math.random() * tablesToMigrate.length)];
+            addLog(`Copying table '${table.name}'... processed ${Math.floor(Math.random() * table.rows)} rows.`);
+          }
+        }, 800);
       }
-      setProgress(currentProgress);
-      
-      // Random log generation during progress
-      if (Math.random() > 0.7 && tablesToMigrate.length > 0) {
-        const table = tablesToMigrate[Math.floor(Math.random() * tablesToMigrate.length)];
-        addLog(`Copying table '${table.name}'... processed ${Math.floor(Math.random() * table.rows)} rows.`);
-      }
-    }, 800);
+    } catch (error: any) {
+      addLog(`Error: ${error.message}`);
+      toast({
+        title: "Migration Failed",
+        description: error.message,
+        variant: "destructive"
+      });
+      setStep("analyze");
+    }
   };
 
   const getFilteredTables = () => {
@@ -423,6 +519,35 @@ if __name__ == "__main__":
                   exit={{ opacity: 0, y: -20 }}
                   className="space-y-6"
                 >
+                  {/* Environment Variable Banner */}
+                  {hasEnvConfig && (
+                    <Card className={`border-2 ${useEnvVars ? 'border-emerald-500/50 bg-emerald-500/5' : 'border-border/50'}`}>
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <div className={`p-2 rounded-lg ${useEnvVars ? 'bg-emerald-500/20' : 'bg-muted'}`}>
+                              <CheckCircle2 className={`w-5 h-5 ${useEnvVars ? 'text-emerald-500' : 'text-muted-foreground'}`} />
+                            </div>
+                            <div>
+                              <h4 className="font-semibold">Environment Variables Detected</h4>
+                              <p className="text-sm text-muted-foreground">
+                                DATABASE_URL_OLD → DATABASE_URL_NEW
+                              </p>
+                            </div>
+                          </div>
+                          <Button 
+                            variant={useEnvVars ? "default" : "outline"} 
+                            size="sm"
+                            onClick={() => setUseEnvVars(!useEnvVars)}
+                          >
+                            {useEnvVars ? "Using Env Vars" : "Use Env Vars"}
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
+
+                  {!useEnvVars && (
                   <div className="grid md:grid-cols-2 gap-6">
                     {/* Source DB Form */}
                     <Card className="border-primary/20 shadow-lg shadow-primary/5">
@@ -540,6 +665,7 @@ if __name__ == "__main__":
                       </CardContent>
                     </Card>
                   </div>
+                  )}
 
                   {/* Migration Settings */}
                   <Card className="border-primary/20">

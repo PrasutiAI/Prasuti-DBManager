@@ -220,11 +220,11 @@ export async function registerRoutes(
           }).join(', ');
 
           // Drop and recreate table
-          await destSql`DROP TABLE IF EXISTS ${neon.identifier(tableName)} CASCADE`;
-          await destSql.unsafe(`CREATE TABLE "${tableName}" (${columnDefs})`);
+          await destSql(`DROP TABLE IF EXISTS "${tableName}" CASCADE`);
+          await destSql(`CREATE TABLE "${tableName}" (${columnDefs})`);
 
           // Copy data
-          const data = await sourceSql`SELECT * FROM ${neon.identifier(tableName)}`;
+          const data = await sourceSql(`SELECT * FROM "${tableName}"`);
           
           let rowsCopied = 0;
           for (const row of data) {
@@ -232,7 +232,7 @@ export async function registerRoutes(
             const vals = Object.values(row);
             const placeholders = cols.map((_, i) => `$${i + 1}`).join(', ');
             const colNames = cols.map(c => `"${c}"`).join(', ');
-            await destSql.unsafe(`INSERT INTO "${tableName}" (${colNames}) VALUES (${placeholders})`, vals);
+            await destSql(`INSERT INTO "${tableName}" (${colNames}) VALUES (${placeholders})`, vals);
             rowsCopied++;
           }
 
