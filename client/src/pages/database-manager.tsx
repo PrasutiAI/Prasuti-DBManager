@@ -82,6 +82,7 @@ export default function DatabaseManager() {
   const [isBackupDialogOpen, setIsBackupDialogOpen] = useState(false);
   const [backupMode, setBackupMode] = useState<"schema" | "data">("data");
   const [backupTableToUse, setBackupTableToUse] = useState<string | null>(null);
+  const [isBackupLoading, setIsBackupLoading] = useState(false);
   
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -327,6 +328,7 @@ export default function DatabaseManager() {
 
   // Backup download
   const downloadBackup = async (selectedTables?: string[], includeData: boolean = true) => {
+    setIsBackupLoading(true);
     try {
       const res = await fetch("/api/db/backup", {
         method: "POST",
@@ -355,12 +357,16 @@ export default function DatabaseManager() {
         title: "Backup downloaded",
         description: "SQL backup file has been downloaded"
       });
+      
+      setIsBackupDialogOpen(false);
     } catch (error: any) {
       toast({
         title: "Backup failed",
         description: error.message,
         variant: "destructive"
       });
+    } finally {
+      setIsBackupLoading(false);
     }
   };
 
@@ -373,7 +379,6 @@ export default function DatabaseManager() {
     const includeData = backupMode === "data";
     const tablesToBackup = backupTableToUse ? [backupTableToUse] : undefined;
     downloadBackup(tablesToBackup, includeData);
-    setIsBackupDialogOpen(false);
   };
 
   const handleTableSelect = (tableName: string) => {
@@ -1193,7 +1198,7 @@ export default function DatabaseManager() {
       </AlertDialog>
 
       {/* Backup Options Dialog */}
-      <Dialog open={isBackupDialogOpen} onOpenChange={setIsBackupDialogOpen}>
+      <Dialog open={isBackupDialogOpen} onOpenChange={(open) => !isBackupLoading && setIsBackupDialogOpen(open)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Backup Options</DialogTitle>
@@ -1202,32 +1207,60 @@ export default function DatabaseManager() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="space-y-3">
-              <div 
-                className={`p-4 border-2 rounded-lg cursor-pointer transition ${backupMode === 'schema' ? 'border-primary bg-primary/5' : 'border-border'}`}
-                onClick={() => setBackupMode('schema')}
-                data-testid="option-schema-only"
-              >
-                <div className="font-semibold">Schema Only</div>
-                <div className="text-sm text-muted-foreground">Backup table structure without data</div>
+            {isBackupLoading ? (
+              <div className="flex flex-col items-center justify-center py-8 space-y-3">
+                <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                <div className="text-center">
+                  <p className="font-semibold">Creating backup...</p>
+                  <p className="text-sm text-muted-foreground">This may take a few moments</p>
+                </div>
               </div>
-              <div 
-                className={`p-4 border-2 rounded-lg cursor-pointer transition ${backupMode === 'data' ? 'border-primary bg-primary/5' : 'border-border'}`}
-                onClick={() => setBackupMode('data')}
-                data-testid="option-data-schema"
-              >
-                <div className="font-semibold">Data + Schema</div>
-                <div className="text-sm text-muted-foreground">Backup complete database with all data</div>
+            ) : (
+              <div className="space-y-3">
+                <div 
+                  className={`p-4 border-2 rounded-lg cursor-pointer transition ${backupMode === 'schema' ? 'border-primary bg-primary/5' : 'border-border'}`}
+                  onClick={() => setBackupMode('schema')}
+                  data-testid="option-schema-only"
+                >
+                  <div className="font-semibold">Schema Only</div>
+                  <div className="text-sm text-muted-foreground">Backup table structure without data</div>
+                </div>
+                <div 
+                  className={`p-4 border-2 rounded-lg cursor-pointer transition ${backupMode === 'data' ? 'border-primary bg-primary/5' : 'border-border'}`}
+                  onClick={() => setBackupMode('data')}
+                  data-testid="option-data-schema"
+                >
+                  <div className="font-semibold">Data + Schema</div>
+                  <div className="text-sm text-muted-foreground">Backup complete database with all data</div>
+                </div>
               </div>
-            </div>
+            )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setIsBackupDialogOpen(false)} data-testid="button-cancel-backup">
+            <Button 
+              variant="outline" 
+              onClick={() => setIsBackupDialogOpen(false)} 
+              data-testid="button-cancel-backup"
+              disabled={isBackupLoading}
+            >
               Cancel
             </Button>
-            <Button onClick={handleConfirmBackup} data-testid="button-confirm-backup">
-              <Download className="w-4 h-4 mr-2" />
-              Download Backup
+            <Button 
+              onClick={handleConfirmBackup} 
+              data-testid="button-confirm-backup"
+              disabled={isBackupLoading}
+            >
+              {isBackupLoading ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                <>
+                  <Download className="w-4 h-4 mr-2" />
+                  Download Backup
+                </>
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>
