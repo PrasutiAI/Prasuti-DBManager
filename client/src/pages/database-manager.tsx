@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -83,6 +84,7 @@ export default function DatabaseManager() {
   const [backupMode, setBackupMode] = useState<"schema" | "data">("data");
   const [backupTableToUse, setBackupTableToUse] = useState<string | null>(null);
   const [isBackupLoading, setIsBackupLoading] = useState(false);
+  const [selectedBackupTables, setSelectedBackupTables] = useState<Set<string>>(new Set());
   
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -372,12 +374,48 @@ export default function DatabaseManager() {
 
   const handleBackupClick = (tableName?: string) => {
     setBackupTableToUse(tableName || null);
+    if (tableName) {
+      setSelectedBackupTables(new Set([tableName]));
+    } else {
+      // For "Backup All", select all tables
+      if (tablesData?.tables) {
+        setSelectedBackupTables(new Set(tablesData.tables.map((t: TableInfo) => t.name)));
+      }
+    }
     setIsBackupDialogOpen(true);
   };
 
+  const toggleBackupTable = (tableName: string) => {
+    const newSelected = new Set(selectedBackupTables);
+    if (newSelected.has(tableName)) {
+      newSelected.delete(tableName);
+    } else {
+      newSelected.add(tableName);
+    }
+    setSelectedBackupTables(newSelected);
+  };
+
+  const selectAllBackupTables = () => {
+    if (tablesData?.tables) {
+      setSelectedBackupTables(new Set(tablesData.tables.map((t: TableInfo) => t.name)));
+    }
+  };
+
+  const unselectAllBackupTables = () => {
+    setSelectedBackupTables(new Set());
+  };
+
   const handleConfirmBackup = () => {
+    if (selectedBackupTables.size === 0) {
+      toast({
+        title: "No tables selected",
+        description: "Please select at least one table for backup",
+        variant: "destructive"
+      });
+      return;
+    }
     const includeData = backupMode === "data";
-    const tablesToBackup = backupTableToUse ? [backupTableToUse] : undefined;
+    const tablesToBackup = Array.from(selectedBackupTables);
     downloadBackup(tablesToBackup, includeData);
   };
 
@@ -1199,11 +1237,11 @@ export default function DatabaseManager() {
 
       {/* Backup Options Dialog */}
       <Dialog open={isBackupDialogOpen} onOpenChange={(open) => !isBackupLoading && setIsBackupDialogOpen(open)}>
-        <DialogContent>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Backup Options</DialogTitle>
             <DialogDescription>
-              Choose whether to backup schema only or schema plus data
+              Select tables and choose backup type
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -1216,24 +1254,84 @@ export default function DatabaseManager() {
                 </div>
               </div>
             ) : (
-              <div className="space-y-3">
-                <div 
-                  className={`p-4 border-2 rounded-lg cursor-pointer transition ${backupMode === 'schema' ? 'border-primary bg-primary/5' : 'border-border'}`}
-                  onClick={() => setBackupMode('schema')}
-                  data-testid="option-schema-only"
-                >
-                  <div className="font-semibold">Schema Only</div>
-                  <div className="text-sm text-muted-foreground">Backup table structure without data</div>
+              <>
+                {/* Backup Mode Selection */}
+                <div className="space-y-2">
+                  <Label className="text-base font-semibold">Backup Type</Label>
+                  <div className="space-y-2">
+                    <div 
+                      className={`p-3 border-2 rounded-lg cursor-pointer transition ${backupMode === 'schema' ? 'border-primary bg-primary/5' : 'border-border'}`}
+                      onClick={() => setBackupMode('schema')}
+                      data-testid="option-schema-only"
+                    >
+                      <div className="font-medium text-sm">Schema Only</div>
+                      <div className="text-xs text-muted-foreground">Backup table structure without data</div>
+                    </div>
+                    <div 
+                      className={`p-3 border-2 rounded-lg cursor-pointer transition ${backupMode === 'data' ? 'border-primary bg-primary/5' : 'border-border'}`}
+                      onClick={() => setBackupMode('data')}
+                      data-testid="option-data-schema"
+                    >
+                      <div className="font-medium text-sm">Data + Schema</div>
+                      <div className="text-xs text-muted-foreground">Backup complete database with all data</div>
+                    </div>
+                  </div>
                 </div>
-                <div 
-                  className={`p-4 border-2 rounded-lg cursor-pointer transition ${backupMode === 'data' ? 'border-primary bg-primary/5' : 'border-border'}`}
-                  onClick={() => setBackupMode('data')}
-                  data-testid="option-data-schema"
-                >
-                  <div className="font-semibold">Data + Schema</div>
-                  <div className="text-sm text-muted-foreground">Backup complete database with all data</div>
+
+                {/* Table Selection */}
+                <div className="space-y-2">
+                  <Label className="text-base font-semibold">Select Tables</Label>
+                  <div className="flex gap-2 mb-3">
+                    <Button 
+                      size="sm" 
+                      variant="outline"
+                      onClick={selectAllBackupTables}
+                      data-testid="button-select-all-tables"
+                    >
+                      Select All
+                    </Button>
+                    <Button 
+                      size="sm" 
+                      variant="outline"
+                      onClick={unselectAllBackupTables}
+                      data-testid="button-unselect-all-tables"
+                    >
+                      Unselect All
+                    </Button>
+                  </div>
+                  <ScrollArea className="border rounded-lg p-3 h-[200px]">
+                    <div className="space-y-2">
+                      {tablesData?.tables && tablesData.tables.length > 0 ? (
+                        tablesData.tables.map((table: TableInfo) => (
+                          <div key={table.name} className="flex items-center space-x-2 py-1">
+                            <Checkbox 
+                              id={`table-${table.name}`}
+                              checked={selectedBackupTables.has(table.name)}
+                              onCheckedChange={() => toggleBackupTable(table.name)}
+                              data-testid={`checkbox-table-${table.name}`}
+                            />
+                            <Label 
+                              htmlFor={`table-${table.name}`}
+                              className="cursor-pointer text-sm font-normal flex-1"
+                              data-testid={`label-table-${table.name}`}
+                            >
+                              {table.name}
+                            </Label>
+                            <span className="text-xs text-muted-foreground">
+                              {table.rows} rows
+                            </span>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No tables available</p>
+                      )}
+                    </div>
+                  </ScrollArea>
+                  <p className="text-xs text-muted-foreground">
+                    {selectedBackupTables.size} of {tablesData?.tables?.length || 0} tables selected
+                  </p>
                 </div>
-              </div>
+              </>
             )}
           </div>
           <DialogFooter>
