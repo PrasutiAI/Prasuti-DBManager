@@ -36,6 +36,218 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
+  // Check if environment variables are configured
+  app.get("/api/config", async (_req, res) => {
+    const hasOldDb = !!process.env.DATABASE_URL_OLD;
+    const hasNewDb = !!process.env.DATABASE_URL_NEW;
+    res.json({ 
+      hasEnvConfig: hasOldDb && hasNewDb,
+      sourceConfigured: hasOldDb,
+      destinationConfigured: hasNewDb
+    });
+  });
+
+  // Quick connect using environment variables
+  app.post("/api/quick-connect", async (_req, res) => {
+    const sourceUrl = process.env.DATABASE_URL_OLD;
+    const destUrl = process.env.DATABASE_URL_NEW;
+
+    if (!sourceUrl || !destUrl) {
+      return res.status(400).json({ 
+        error: "Environment variables DATABASE_URL_OLD and DATABASE_URL_NEW must be set" 
+      });
+    }
+
+    try {
+      // Test source connection
+      const sourceSql = neon(sourceUrl);
+      await sourceSql`SELECT 1`;
+
+      // Test destination connection
+      const destSql = neon(destUrl);
+      await destSql`SELECT 1`;
+
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  // Analyze using environment variables
+  app.post("/api/quick-analyze", async (req, res) => {
+    const sourceUrl = process.env.DATABASE_URL_OLD;
+    const { tablePattern } = req.body;
+
+    if (!sourceUrl) {
+      return res.status(400).json({ error: "DATABASE_URL_OLD not configured" });
+    }
+
+    try {
+      const sql = neon(sourceUrl);
+      const tables = await sql`
+        SELECT 
+          schemaname || '.' || tablename as table_name,
+          pg_total_relation_size(schemaname || '.' || tablename) as size_bytes,
+          n_live_tup as row_count
+        FROM pg_stat_user_tables
+        WHERE schemaname = 'public'
+        ORDER BY table_name
+      `;
+
+      const tableInfos: TableInfo[] = tables
+        .map((t: any) => ({
+          name: t.table_name.replace('public.', ''),
+          rows: parseInt(t.row_count) || 0,
+          size: formatBytes(parseInt(t.size_bytes) || 0)
+        }))
+        .filter((t: TableInfo) => !isSystemTable(t.name))
+        .filter((t: TableInfo) => matchesPattern(t.name, tablePattern));
+
+      res.json({ tables: tableInfos });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Quick dry-run using environment variables
+  app.post("/api/quick-dry-run", async (req, res) => {
+    const sourceUrl = process.env.DATABASE_URL_OLD;
+    const { tablePattern } = req.body;
+
+    if (!sourceUrl) {
+      return res.status(400).json({ error: "DATABASE_URL_OLD not configured" });
+    }
+
+    try {
+      const sql = neon(sourceUrl);
+      const tables = await sql`
+        SELECT 
+          table_name,
+          column_name,
+          data_type,
+          is_nullable,
+          column_default
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+        ORDER BY table_name, ordinal_position
+      `;
+
+      const tableSchemas = new Map<string, any[]>();
+      for (const col of tables) {
+        const tableName = col.table_name;
+        if (isSystemTable(tableName) || !matchesPattern(tableName, tablePattern)) {
+          continue;
+        }
+        if (!tableSchemas.has(tableName)) {
+          tableSchemas.set(tableName, []);
+        }
+        tableSchemas.get(tableName)!.push(col);
+      }
+
+      const plan = Array.from(tableSchemas.keys()).map(tableName => {
+        const columns = tableSchemas.get(tableName)!;
+        const createColumns = columns.map((col: any) => 
+          `${col.column_name} ${col.data_type}${col.is_nullable === 'NO' ? ' NOT NULL' : ''}${col.column_default ? ` DEFAULT ${col.column_default}` : ''}`
+        ).join(',\n  ');
+
+        return {
+          tableName,
+          actions: [
+            `DROP TABLE IF EXISTS public.${tableName} CASCADE;`,
+            `CREATE TABLE public.${tableName} (\n  ${createColumns}\n);`,
+            `-- Copy data from source`,
+          ]
+        };
+      });
+
+      res.json({ plan });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Execute migration using environment variables
+  app.post("/api/quick-migrate", async (req, res) => {
+    const sourceUrl = process.env.DATABASE_URL_OLD;
+    const destUrl = process.env.DATABASE_URL_NEW;
+    const { tablePattern } = req.body;
+
+    if (!sourceUrl || !destUrl) {
+      return res.status(400).json({ error: "Database URLs not configured" });
+    }
+
+    try {
+      const sourceSql = neon(sourceUrl);
+      const destSql = neon(destUrl);
+
+      // Get tables to migrate
+      const tables = await sourceSql`
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+      `;
+
+      const tablesToMigrate = tables
+        .map((t: any) => t.table_name)
+        .filter((name: string) => !isSystemTable(name))
+        .filter((name: string) => matchesPattern(name, tablePattern));
+
+      const results: any[] = [];
+
+      for (const tableName of tablesToMigrate) {
+        try {
+          // Get column info
+          const columns = await sourceSql`
+            SELECT column_name, data_type, is_nullable, column_default, character_maximum_length
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = ${tableName}
+            ORDER BY ordinal_position
+          `;
+
+          // Build CREATE TABLE statement
+          const columnDefs = columns.map((col: any) => {
+            let def = `"${col.column_name}" ${col.data_type}`;
+            if (col.character_maximum_length) {
+              def += `(${col.character_maximum_length})`;
+            }
+            if (col.is_nullable === 'NO') {
+              def += ' NOT NULL';
+            }
+            if (col.column_default) {
+              def += ` DEFAULT ${col.column_default}`;
+            }
+            return def;
+          }).join(', ');
+
+          // Drop and recreate table
+          await destSql`DROP TABLE IF EXISTS ${neon.identifier(tableName)} CASCADE`;
+          await destSql.unsafe(`CREATE TABLE "${tableName}" (${columnDefs})`);
+
+          // Copy data
+          const data = await sourceSql`SELECT * FROM ${neon.identifier(tableName)}`;
+          
+          let rowsCopied = 0;
+          for (const row of data) {
+            const cols = Object.keys(row);
+            const vals = Object.values(row);
+            const placeholders = cols.map((_, i) => `$${i + 1}`).join(', ');
+            const colNames = cols.map(c => `"${c}"`).join(', ');
+            await destSql.unsafe(`INSERT INTO "${tableName}" (${colNames}) VALUES (${placeholders})`, vals);
+            rowsCopied++;
+          }
+
+          results.push({ table: tableName, status: 'success', rowsCopied });
+        } catch (error: any) {
+          results.push({ table: tableName, status: 'error', error: error.message });
+        }
+      }
+
+      res.json({ success: true, results });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // Test database connections
   app.post("/api/connect", async (req, res) => {
     try {
