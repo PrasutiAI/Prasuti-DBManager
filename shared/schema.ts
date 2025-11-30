@@ -114,6 +114,7 @@ export type RowMutation = z.infer<typeof rowMutationSchema>;
 export const backupRequestSchema = z.object({
   db: dbSelectionSchema,
   selectedTables: z.array(z.string()).optional(),
+  includeData: z.boolean().optional().default(true),
 });
 
 export type BackupRequest = z.infer<typeof backupRequestSchema>;

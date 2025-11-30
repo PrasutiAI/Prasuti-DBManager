@@ -1139,7 +1139,7 @@ if __name__ == "__main__":
         return res.status(400).json({ error: fromZodError(result.error).message });
       }
 
-      const { db, selectedTables } = result.data;
+      const { db, selectedTables, includeData } = result.data;
       const dbUrl = getDatabaseUrl(db);
 
       if (!dbUrl) {
@@ -1199,22 +1199,24 @@ if __name__ == "__main__":
           sqlDump += `DROP TABLE IF EXISTS "${tableName}" CASCADE;\n`;
           sqlDump += `CREATE TABLE "${tableName}" (\n  ${columnDefs}\n);\n`;
 
-          // Get data
-          const data = await sql(`SELECT * FROM "${tableName}"`);
+          // Get data only if includeData is true
+          if (includeData !== false) {
+            const data = await sql(`SELECT * FROM "${tableName}"`);
 
-          if (data.length > 0) {
-            sqlDump += `\n-- Data for ${tableName}\n`;
-            for (const row of data) {
-              const cols = Object.keys(row);
-              const vals = cols.map(c => {
-                const val = row[c];
-                if (val === null) return 'NULL';
-                if (typeof val === 'string') return `'${val.replace(/'/g, "''")}'`;
-                if (val instanceof Date) return `'${val.toISOString()}'`;
-                if (typeof val === 'object') return `'${JSON.stringify(val).replace(/'/g, "''")}'`;
-                return val;
-              });
-              sqlDump += `INSERT INTO "${tableName}" (${cols.map(c => `"${c}"`).join(', ')}) VALUES (${vals.join(', ')});\n`;
+            if (data.length > 0) {
+              sqlDump += `\n-- Data for ${tableName}\n`;
+              for (const row of data) {
+                const cols = Object.keys(row);
+                const vals = cols.map(c => {
+                  const val = row[c];
+                  if (val === null) return 'NULL';
+                  if (typeof val === 'string') return `'${val.replace(/'/g, "''")}'`;
+                  if (val instanceof Date) return `'${val.toISOString()}'`;
+                  if (typeof val === 'object') return `'${JSON.stringify(val).replace(/'/g, "''")}'`;
+                  return val;
+                });
+                sqlDump += `INSERT INTO "${tableName}" (${cols.map(c => `"${c}"`).join(', ')}) VALUES (${vals.join(', ')});\n`;
+              }
             }
           }
         } catch (error: any) {

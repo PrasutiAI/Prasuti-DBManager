@@ -79,6 +79,9 @@ export default function DatabaseManager() {
   const [sqlQuery, setSqlQuery] = useState("SELECT * FROM ");
   const [queryResult, setQueryResult] = useState<any>(null);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [isBackupDialogOpen, setIsBackupDialogOpen] = useState(false);
+  const [backupMode, setBackupMode] = useState<"schema" | "data">("data");
+  const [backupTableToUse, setBackupTableToUse] = useState<string | null>(null);
   
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -323,14 +326,15 @@ export default function DatabaseManager() {
   });
 
   // Backup download
-  const downloadBackup = async (selectedTables?: string[]) => {
+  const downloadBackup = async (selectedTables?: string[], includeData: boolean = true) => {
     try {
       const res = await fetch("/api/db/backup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           db: selectedDb,
-          selectedTables
+          selectedTables,
+          includeData
         })
       });
 
@@ -358,6 +362,18 @@ export default function DatabaseManager() {
         variant: "destructive"
       });
     }
+  };
+
+  const handleBackupClick = (tableName?: string) => {
+    setBackupTableToUse(tableName || null);
+    setIsBackupDialogOpen(true);
+  };
+
+  const handleConfirmBackup = () => {
+    const includeData = backupMode === "data";
+    const tablesToBackup = backupTableToUse ? [backupTableToUse] : undefined;
+    downloadBackup(tablesToBackup, includeData);
+    setIsBackupDialogOpen(false);
   };
 
   const handleTableSelect = (tableName: string) => {
@@ -642,7 +658,7 @@ export default function DatabaseManager() {
               Refresh
             </Button>
             <Button 
-              onClick={() => downloadBackup()}
+              onClick={() => handleBackupClick()}
               data-testid="button-backup"
             >
               <Download className="w-4 h-4 mr-2" />
@@ -751,7 +767,7 @@ export default function DatabaseManager() {
                       <Button 
                         variant="outline" 
                         size="sm"
-                        onClick={() => downloadBackup([selectedTable])}
+                        onClick={() => handleBackupClick(selectedTable)}
                         data-testid="button-backup-table"
                       >
                         <Download className="w-4 h-4 mr-1" />
@@ -1175,6 +1191,47 @@ export default function DatabaseManager() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Backup Options Dialog */}
+      <Dialog open={isBackupDialogOpen} onOpenChange={setIsBackupDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Backup Options</DialogTitle>
+            <DialogDescription>
+              Choose whether to backup schema only or schema plus data
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-3">
+              <div 
+                className={`p-4 border-2 rounded-lg cursor-pointer transition ${backupMode === 'schema' ? 'border-primary bg-primary/5' : 'border-border'}`}
+                onClick={() => setBackupMode('schema')}
+                data-testid="option-schema-only"
+              >
+                <div className="font-semibold">Schema Only</div>
+                <div className="text-sm text-muted-foreground">Backup table structure without data</div>
+              </div>
+              <div 
+                className={`p-4 border-2 rounded-lg cursor-pointer transition ${backupMode === 'data' ? 'border-primary bg-primary/5' : 'border-border'}`}
+                onClick={() => setBackupMode('data')}
+                data-testid="option-data-schema"
+              >
+                <div className="font-semibold">Data + Schema</div>
+                <div className="text-sm text-muted-foreground">Backup complete database with all data</div>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsBackupDialogOpen(false)} data-testid="button-cancel-backup">
+              Cancel
+            </Button>
+            <Button onClick={handleConfirmBackup} data-testid="button-confirm-backup">
+              <Download className="w-4 h-4 mr-2" />
+              Download Backup
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
