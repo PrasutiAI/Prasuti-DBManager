@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { 
   Database, 
   ArrowRight, 
@@ -27,11 +28,19 @@ import { useToast } from "@/hooks/use-toast";
 
 // Form Schema for DB Connection
 const connectionSchema = z.object({
-  host: z.string().min(1, "Host is required"),
-  port: z.string().min(1, "Port is required"),
-  database: z.string().min(1, "Database name is required"),
-  user: z.string().min(1, "User is required"),
-  password: z.string().min(1, "Password is required"),
+  host: z.string().optional(),
+  port: z.string().optional(),
+  database: z.string().optional(),
+  user: z.string().optional(),
+  password: z.string().optional(),
+  connectionString: z.string().optional(),
+}).refine((data) => {
+  // Either connection string is provided OR all individual fields are provided
+  if (data.connectionString && data.connectionString.length > 0) return true;
+  return data.host && data.port && data.database && data.user && data.password;
+}, {
+  message: "Please provide either a connection string or fill out all connection details",
+  path: ["connectionString"], // Error path
 });
 
 type ConnectionFormValues = z.infer<typeof connectionSchema>;
@@ -53,12 +62,12 @@ export default function DatabaseMigrator() {
 
   const sourceForm = useForm<ConnectionFormValues>({
     resolver: zodResolver(connectionSchema),
-    defaultValues: { host: "localhost", port: "5432", user: "postgres" }
+    defaultValues: { host: "localhost", port: "5432", user: "postgres", connectionString: "" }
   });
 
   const destForm = useForm<ConnectionFormValues>({
     resolver: zodResolver(connectionSchema),
-    defaultValues: { host: "production-db.aws.com", port: "5432", user: "admin" }
+    defaultValues: { host: "production-db.aws.com", port: "5432", user: "admin", connectionString: "" }
   });
 
   const addLog = (message: string) => {
@@ -173,31 +182,52 @@ export default function DatabaseMigrator() {
                         </CardTitle>
                         <CardDescription>Read-only access required</CardDescription>
                       </CardHeader>
-                      <CardContent className="space-y-4">
-                        <div className="space-y-2">
-                          <Label>Host</Label>
-                          <Input {...sourceForm.register("host")} className="font-mono text-sm" />
-                        </div>
-                        <div className="grid grid-cols-2 gap-4">
-                          <div className="space-y-2">
-                            <Label>Port</Label>
-                            <Input {...sourceForm.register("port")} className="font-mono text-sm" />
-                          </div>
-                          <div className="space-y-2">
-                            <Label>Database</Label>
-                            <Input {...sourceForm.register("database")} placeholder="my_db" className="font-mono text-sm" />
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-2 gap-4">
-                          <div className="space-y-2">
-                            <Label>User</Label>
-                            <Input {...sourceForm.register("user")} className="font-mono text-sm" />
-                          </div>
-                          <div className="space-y-2">
-                            <Label>Password</Label>
-                            <Input {...sourceForm.register("password")} type="password" placeholder="••••••" className="font-mono text-sm" />
-                          </div>
-                        </div>
+                      <CardContent>
+                        <Tabs defaultValue="manual" className="w-full">
+                          <TabsList className="w-full mb-4">
+                            <TabsTrigger value="manual" className="flex-1">Manual</TabsTrigger>
+                            <TabsTrigger value="string" className="flex-1">Connection String</TabsTrigger>
+                          </TabsList>
+                          <TabsContent value="manual" className="space-y-4">
+                            <div className="space-y-2">
+                              <Label>Host</Label>
+                              <Input {...sourceForm.register("host")} className="font-mono text-sm" />
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                              <div className="space-y-2">
+                                <Label>Port</Label>
+                                <Input {...sourceForm.register("port")} className="font-mono text-sm" />
+                              </div>
+                              <div className="space-y-2">
+                                <Label>Database</Label>
+                                <Input {...sourceForm.register("database")} placeholder="my_db" className="font-mono text-sm" />
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                              <div className="space-y-2">
+                                <Label>User</Label>
+                                <Input {...sourceForm.register("user")} className="font-mono text-sm" />
+                              </div>
+                              <div className="space-y-2">
+                                <Label>Password</Label>
+                                <Input {...sourceForm.register("password")} type="password" placeholder="••••••" className="font-mono text-sm" />
+                              </div>
+                            </div>
+                          </TabsContent>
+                          <TabsContent value="string" className="space-y-4">
+                            <div className="space-y-2">
+                              <Label>Connection URI</Label>
+                              <Input 
+                                {...sourceForm.register("connectionString")} 
+                                placeholder="postgresql://user:password@localhost:5432/mydb" 
+                                className="font-mono text-sm" 
+                              />
+                              <p className="text-xs text-muted-foreground">
+                                Standard connection URI format
+                              </p>
+                            </div>
+                          </TabsContent>
+                        </Tabs>
                       </CardContent>
                     </Card>
 
@@ -210,31 +240,52 @@ export default function DatabaseMigrator() {
                         </CardTitle>
                         <CardDescription>Write access required</CardDescription>
                       </CardHeader>
-                      <CardContent className="space-y-4">
-                        <div className="space-y-2">
-                          <Label>Host</Label>
-                          <Input {...destForm.register("host")} className="font-mono text-sm" />
-                        </div>
-                        <div className="grid grid-cols-2 gap-4">
-                          <div className="space-y-2">
-                            <Label>Port</Label>
-                            <Input {...destForm.register("port")} className="font-mono text-sm" />
-                          </div>
-                          <div className="space-y-2">
-                            <Label>Database</Label>
-                            <Input {...destForm.register("database")} placeholder="replica_db" className="font-mono text-sm" />
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-2 gap-4">
-                          <div className="space-y-2">
-                            <Label>User</Label>
-                            <Input {...destForm.register("user")} className="font-mono text-sm" />
-                          </div>
-                          <div className="space-y-2">
-                            <Label>Password</Label>
-                            <Input {...destForm.register("password")} type="password" placeholder="••••••" className="font-mono text-sm" />
-                          </div>
-                        </div>
+                      <CardContent>
+                        <Tabs defaultValue="manual" className="w-full">
+                          <TabsList className="w-full mb-4">
+                            <TabsTrigger value="manual" className="flex-1">Manual</TabsTrigger>
+                            <TabsTrigger value="string" className="flex-1">Connection String</TabsTrigger>
+                          </TabsList>
+                          <TabsContent value="manual" className="space-y-4">
+                            <div className="space-y-2">
+                              <Label>Host</Label>
+                              <Input {...destForm.register("host")} className="font-mono text-sm" />
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                              <div className="space-y-2">
+                                <Label>Port</Label>
+                                <Input {...destForm.register("port")} className="font-mono text-sm" />
+                              </div>
+                              <div className="space-y-2">
+                                <Label>Database</Label>
+                                <Input {...destForm.register("database")} placeholder="replica_db" className="font-mono text-sm" />
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                              <div className="space-y-2">
+                                <Label>User</Label>
+                                <Input {...destForm.register("user")} className="font-mono text-sm" />
+                              </div>
+                              <div className="space-y-2">
+                                <Label>Password</Label>
+                                <Input {...destForm.register("password")} type="password" placeholder="••••••" className="font-mono text-sm" />
+                              </div>
+                            </div>
+                          </TabsContent>
+                          <TabsContent value="string" className="space-y-4">
+                            <div className="space-y-2">
+                              <Label>Connection URI</Label>
+                              <Input 
+                                {...destForm.register("connectionString")} 
+                                placeholder="postgresql://user:password@host:5432/replicadb" 
+                                className="font-mono text-sm" 
+                              />
+                              <p className="text-xs text-muted-foreground">
+                                Standard connection URI format
+                              </p>
+                            </div>
+                          </TabsContent>
+                        </Tabs>
                       </CardContent>
                     </Card>
                   </div>
