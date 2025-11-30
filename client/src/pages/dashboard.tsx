@@ -21,7 +21,10 @@ import {
   Terminal,
   Table as TableIcon,
   Download,
-  Code
+  Code,
+  Eye,
+  AlertTriangle,
+  ShieldCheck
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useToast } from "@/hooks/use-toast";
@@ -55,7 +58,7 @@ const MOCK_TABLES = [
 ];
 
 export default function DatabaseMigrator() {
-  const [step, setStep] = useState<"connect" | "analyze" | "migrating" | "complete">("connect");
+  const [step, setStep] = useState<"connect" | "analyze" | "migrating" | "dryrun" | "complete">("connect");
   const [logs, setLogs] = useState<string[]>([]);
   const [progress, setProgress] = useState(0);
   const [tablePattern, setTablePattern] = useState("");
@@ -94,6 +97,15 @@ export default function DatabaseMigrator() {
         variant: "destructive"
       });
     }
+  };
+
+  const startDryRun = () => {
+    setStep("dryrun");
+    addLog("Starting dry run analysis...");
+    setTimeout(() => addLog("Checking destination constraints..."), 500);
+    setTimeout(() => addLog("Verifying schema compatibility..."), 1000);
+    setTimeout(() => addLog("Calculating storage requirements..."), 1500);
+    setTimeout(() => addLog("Dry run analysis complete."), 2000);
   };
 
   const startMigration = () => {
@@ -375,9 +387,68 @@ export default function DatabaseMigrator() {
                   
                   <div className="flex gap-4">
                     <Button variant="outline" onClick={() => setStep("connect")}>Back</Button>
+                    <Button variant="secondary" className="flex-1" onClick={startDryRun}>
+                      <Eye className="w-4 h-4 mr-2" />
+                      Dry Run Analysis
+                    </Button>
                     <Button className="flex-1" onClick={startMigration}>
                       <Play className="w-4 h-4 mr-2" />
                       Start Replication
+                    </Button>
+                  </div>
+                </motion.div>
+              )}
+
+              {step === "dryrun" && (
+                 <motion.div
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="space-y-6"
+                >
+                  <Card className="border-primary/20">
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <ShieldCheck className="w-5 h-5 text-primary" />
+                        Dry Run Results
+                      </CardTitle>
+                      <CardDescription>
+                        Simulated actions that will be performed on destination
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-6">
+                      <div className="space-y-4">
+                         <div className="p-4 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-500">
+                            <div className="flex items-start gap-3">
+                              <AlertTriangle className="w-5 h-5 mt-0.5" />
+                              <div>
+                                <h4 className="font-semibold">Destructive Actions Detected</h4>
+                                <p className="text-sm opacity-90">Existing tables in destination matching the pattern will be dropped before creation.</p>
+                              </div>
+                            </div>
+                         </div>
+
+                         <div className="space-y-2">
+                            <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Execution Plan</h4>
+                            <div className="bg-black/40 rounded-md border border-border/50 font-mono text-xs p-4 space-y-1 overflow-x-auto">
+                               {getFilteredTables().map((table) => (
+                                 <div key={table.name} className="space-y-1 mb-3 last:mb-0">
+                                   <div className="text-blue-400">-- Table: {table.name}</div>
+                                   <div className="text-red-400">DROP TABLE IF EXISTS public.{table.name} CASCADE;</div>
+                                   <div className="text-green-400">CREATE TABLE public.{table.name} (...);</div>
+                                   <div className="text-muted-foreground">-- Will copy {table.rows.toLocaleString()} rows (~{table.size})</div>
+                                 </div>
+                               ))}
+                            </div>
+                         </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <div className="flex gap-4">
+                    <Button variant="outline" onClick={() => setStep("analyze")}>Back to Analysis</Button>
+                    <Button className="flex-1" onClick={startMigration}>
+                      <Play className="w-4 h-4 mr-2" />
+                      Confirm & Execute
                     </Button>
                   </div>
                 </motion.div>
